@@ -1,271 +1,265 @@
-# BÀI TẬP SESSION 18 (MD5) - BÀI TẬP 4 (HW4)
-## Phân tích và khắc phục Log Rotation (Sự cố sập server do ổ cứng đầy)
+# BÀI TẬP SESSION 18 (MD5) - BÀI TẬP 5 (HW5)
+## Hệ thống Distributed Tracing (Truy vết phân tán qua chuỗi Microservices)
 
-![Đề bài](ss18-4.png)
+![Đề bài](ss18-5.png)
 
 ---
 
 ## 1. Mục tiêu kiến thức & Tình huống nghiệp vụ
 
 - **Mục tiêu kiến thức**:
-  - Nắm vững nguyên lý và kỹ thuật **xoay vòng log (Log Rotation)** trong Logback framework kết hợp với Spring Boot.
-  - Phân biệt rõ rệt giữa **`FileAppender`** (ghi dồn một file duy nhất) và **`RollingFileAppender`** (tự động phân đoạn và dọn dẹp log theo chính sách).
-  - Làm chủ cấu hình **`SizeAndTimeBasedRollingPolicy`**: Xoay vòng file log kết hợp cả 2 điều kiện: **theo ngày (`%d{yyyy-MM-dd}`)** và **theo kích thước dung lượng (`maxFileSize = 10MB`)**.
-  - Hiểu cách thiết lập giới hạn lưu trữ tối đa (**`maxHistory = 30 ngày`**) và trần dung lượng an toàn (**`totalSizeCap = 3GB`**) để bảo vệ máy chủ khỏi nguy cơ cạn kiệt dung lượng đĩa (**Disk Full / 100% Usage**).
+  - Nắm vững nguyên lý hoạt động của **Distributed Tracing (Truy vết phân tán)** trong kiến trúc Microservices hiện đại.
+  - Sử dụng thư viện chuẩn của Spring Boot 3: **`micrometer-tracing-bridge-brave`** (thay thế cho Spring Cloud Sleuth ở các phiên bản cũ) kết hợp với **Spring Boot Actuator**.
+  - Hiểu cơ chế **Context Propagation (Lan truyền ngữ cảnh)** qua giao thức HTTP: Cách `RestTemplate` (được cấu hình qua `RestTemplateBuilder`) tự động đóng gói và truyền các header tracing chuẩn W3C (`traceparent`) hoặc B3 (`b3`) sang service kế tiếp.
+  - Cấu hình format log tự động chèn định dạng chuẩn: **`[Service-Name, traceId, spanId]`**.
+  - Đảm bảo **`traceId` hoàn toàn giống hệt nhau** trên tất cả các microservices trong cùng một chuỗi request mà **không cần cài đặt Zipkin server** bên ngoài.
 
-- **Tình huống nghiệp vụ (Production Outage - Disk Full 100%)**:
-  - Máy chủ VPS của hệ thống thương mại điện tử **StoreX** bất ngờ bị treo cứng và sập toàn bộ dịch vụ (Downtime nghiêm trọng).
-  - Đội ngũ hạ tầng (SRE/DevOps) kiểm tra và phát hiện dung lượng phân vùng ổ cứng đĩa chứa hệ điều hành đã đạt ngưỡng **100% (No space left on device)**.
-  - **Nguyên nhân gốc rễ**: File `logs/application.log` sau 3 tháng vận hành đã phình to vượt mức **40GB** mà không hề được cắt file hay xóa bớt.
-  - **Phân tích cấu hình cũ**:
-    ```xml
-    <!-- LỖI NGHIÊM TRỌNG TRONG LOGBACK: Dùng FileAppender -->
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
-        <file>logs/application.log</file>
-        <encoder>
-            <pattern>%d %p %c{1.} [%t] %m%n</pattern>
-        </encoder>
-    </appender>
-    ```
-    `FileAppender` là appender ghi nối tiếp (append) vĩnh viễn vào một file duy nhất. Ứng dụng chạy càng lâu thì file càng lớn đến khi bóp nghẹt toàn bộ ổ cứng server!
-  - **Giải pháp**: Thay thế bằng `RollingFileAppender` với cấu hình xoay vòng theo ngày, kích thước mỗi file 10MB, lưu tối đa 30 ngày.
+- **Tình huống nghiệp vụ (Downstream Failure Troubleshooting)**:
+  - Hệ thống thương mại điện tử **StoreX** vận hành theo kiến trúc Microservices với chuỗi gọi tuần tự:
+    $$\text{Client} \xrightarrow{} \text{API Gateway (8080)} \xrightarrow{} \text{Order Service (8081)} \xrightarrow{} \text{User Service (8082)}$$
+  - Khi một bước ở **`User Service` bị lỗi** (ví dụ: tài khoản người dùng bị khóa hoặc số dư không đủ), chuỗi giao dịch bị ngắt quãng và trả về lỗi `502 Bad Gateway`.
+  - Nếu không có Distributed Tracing, log ở 3 service nằm phân tán ở 3 file/server khác nhau không thể ghép nối được với nhau.
+  - **Yêu cầu bài toán**:
+    1. Bổ sung `micrometer-tracing-bridge-brave` vào cả 3 service (`gateway-service`, `order-service`, `user-service`).
+    2. Cấu hình log xuất ra định dạng `[Service-Name, traceId, spanId]`.
+    3. Kiểm chứng `traceId` trùng khớp tuyệt đối trên cả 3 service cho cùng một chuỗi request.
 
 ---
 
-## 2. Phân tích Kỹ thuật: FileAppender vs. RollingFileAppender
+## 2. Phân tích Kỹ thuật: Cơ chế Distributed Tracing (Brave & Micrometer)
 
-### 2.1. Bảng so sánh kỹ thuật
-
-| Tiêu chí | FileAppender (Cấu hình lỗi cũ) | RollingFileAppender (Giải pháp chuẩn) |
-| :--- | :--- | :--- |
-| **Cơ chế ghi** | Ghi dồn liên tục vào 1 file duy nhất | Ghi vào file hiện hành, tự động cắt khi đạt ngưỡng |
-| **Hành vi theo thời gian** | File phình to vô hạn (10GB, 40GB, 100GB...) | Mỗi file cố định tối đa 10MB, phân tách theo ngày |
-| **Khả năng dọn dẹp** | **Không có**: Cần can thiệp xóa bằng tay hoặc cron script bên ngoài | **Tự động**: Xóa các file cũ hơn 30 ngày (`maxHistory`) |
-| **Khả năng đọc/tra cứu** | Cực kỳ khó mở; mở file 40GB bằng vi/nano/notepad sẽ làm crash RAM máy chủ | Dễ dàng mở, phân tích và chia nhỏ cho shipper đẩy lên ELK |
-| **Nguy cơ hệ thống** | **Rất cao**: Gây sập toàn bộ VPS khi Disk đạt 100% | **Tuyệt đối an toàn**: Giới hạn trần dung lượng đĩa |
-
----
-
-### 2.2. Sơ đồ cơ chế xoay vòng `SizeAndTimeBasedRollingPolicy`
+### 2.1. Phân biệt `TraceId` và `SpanId`
 
 ```
-                            [ CƠ CHẾ LOG ROTATION THEO THỜI GIAN & KÍCH THƯỚC ]
+ [CLIENT REQUEST]
+        │
+        ▼ (Bắt đầu Trace: TraceId = 6aba33cfc3ea052195f03259c620f93d)
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ 1. GATEWAY SERVICE (Port 8080)                                         │
+ │    • TraceId : 6aba33cfc3ea052195f03259c620f93d                        │
+ │    • SpanId  : 95f03259c620f93d (Root Span)                            │
+ │    Log: [gateway-service, 6aba33cfc3ea052195f03259c620f93d, 95f03259...]│
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │ HTTP POST (Headers: traceparent / b3)
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ 2. ORDER SERVICE (Port 8081)                                           │
+ │    • TraceId : 6aba33cfc3ea052195f03259c620f93d (GIỮ NGUYÊN)           │
+ │    • SpanId  : 56e31d7a199da8ad (Child Span 1)                         │
+ │    Log: [order-service, 6aba33cfc3ea052195f03259c620f93d, 56e31d7a...]│
+ └───────────────────────────────────┬────────────────────────────────────┘
+                                     │ HTTP POST (Headers: traceparent / b3)
+                                     ▼
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ 3. USER SERVICE (Port 8082 - NƠI PHÁT SINH LỖI)                        │
+ │    • TraceId : 6aba33cfc3ea052195f03259c620f93d (GIỮ NGUYÊN)           │
+ │    • SpanId  : e720e0747a15caad (Child Span 2)                         │
+ │    Log: [user-service, 6aba33cfc3ea052195f03259c620f93d, e720e074...] │
+ │    ERROR: Người dùng bị khóa tài khoản!                                │
+ └────────────────────────────────────────────────────────────────────────┘
+```
 
-             Luồng log từ ứng dụng Spring Boot
-                           │
-                           ▼
-                 ┌───────────────────┐
-                 │  application.log  │  <── File log hiện hành đang nhận dữ liệu
-                 └─────────┬─────────┘
-                           │
-            Kiểm tra 2 điều kiện xoay vòng:
-            ├── 1. Sang ngày mới? (Midnight Rollover)
-            └── 2. Dung lượng vượt quá 10MB? (Size Rollover)
-                           │
-                           ▼
-          ┌────────────────────────────────────────────────────────┐
-          │     Các file lưu trữ quá khứ (Archived Log Files)      │
-          ├────────────────────────────────────────────────────────┤
-          │  logs/application-2026-09-27.0.log (10 MB)            │
-          │  logs/application-2026-09-28.0.log (10 MB)            │
-          │  logs/application-2026-09-28.1.log (10 MB)            │
-          │  logs/application-2026-09-28.2.log (10 MB)            │
-          │  ...                                                   │
-          │  logs/application-2026-09-28.n.log                    │
-          └────────────────────────┬───────────────────────────────┘
-                                   │
-                      Tự động xóa sau 30 ngày (maxHistory = 30)
-                      Tổng dung lượng kiểm soát <= 3GB (totalSizeCap)
-                                   ▼
-                            [ Ổ CỨNG AN TOÀN ]
+- **`TraceId`**: Là định danh xuyên suốt đại diện cho toàn bộ chu trình xử lý của một request từ lúc đi vào Gateway cho đến khi hoàn tất hoặc thất bại ở service sâu nhất.
+- **`SpanId`**: Đại diện cho khoảng thời gian xử lý tại một service hoặc một phân đoạn công việc cụ thể. Mỗi service sinh ra một `SpanId` con riêng biệt nhưng luôn liên kết với cùng một `TraceId`.
+
+---
+
+## 3. Cấu trúc Dự án Đa Module (Multi-Module Maven)
+
+```
+ss18/
+├── .gitignore
+├── pom.xml                                              # Parent POM quản lý chung 3 modules
+├── README.md                                            # Tài liệu báo cáo chi tiết HW5
+├── ss18-1.png, ss18-2.png, ss18-3.png, ss18-4.png
+├── ss18-5.png                                           # Ảnh đề bài HW5
+├── start-all.ps1                                        # Script khởi chạy nhanh cả 3 services
+├── stop-all.ps1                                         # Script giải phóng 3 cổng 8080, 8081, 8082
+├── Session18_HW5_DistributedTracing.postman_collection.json # Bộ sưu tập Postman kiểm thử
+├── gateway-service/                                     # Service cổng vào (Port 8080)
+│   ├── pom.xml
+│   └── src/main/java/com/storex/gateway/
+│       ├── GatewayServiceApplication.java
+│       └── controller/GatewayController.java
+├── order-service/                                       # Service xử lý đơn hàng (Port 8081)
+│   ├── pom.xml
+│   └── src/main/java/com/storex/order/
+│       ├── OrderServiceApplication.java
+│       └── controller/OrderController.java
+└── user-service/                                        # Service xác thực người dùng (Port 8082)
+    ├── pom.xml
+    └── src/main/java/com/storex/user/
+        ├── UserServiceApplication.java
+        └── controller/UserController.java
 ```
 
 ---
 
-## 3. Cấu hình Chuẩn hóa trong `logback-spring.xml`
+## 4. Chi tiết Cấu hình & Cài đặt
 
-Cấu hình khắc phục triệt để sự cố theo đúng yêu cầu đề bài:
-
+### 4.1. Khai báo thư viện Tracing trong `pom.xml`
+Thêm thư viện `micrometer-tracing-bridge-brave` vào cả 3 service (thông qua Parent POM):
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration scan="true" scanPeriod="30 seconds">
+<!-- Spring Boot Web Starter -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
 
-    <property name="CONSOLE_LOG_PATTERN"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %magenta([%X{requestId:-SYSTEM}]) %highlight(%-5level) %cyan(%logger{36}) - %msg%n"/>
+<!-- Spring Boot Actuator: Kích hoạt WebMVC Observation -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
 
-    <property name="FILE_LOG_PATTERN"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{requestId:-SYSTEM}] %-5level %logger{36} - %msg%n"/>
-
-    <!-- 1. Console Appender -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
-
-    <!-- 2. [HW4] RollingFileAppender: Khắc phục triệt để sự cố 40GB Disk Full -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <!-- File log hiện hành đang được ứng dụng ghi trực tiếp -->
-        <file>logs/application.log</file>
-
-        <!-- Chính sách xoay vòng kết hợp Ngày và Kích thước (Logback 1.4+ / Spring Boot 3) -->
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <!-- 1. Cấu hình xoay vòng theo ngày (%d{yyyy-MM-dd}) và chỉ số index (%i) -->
-            <!-- Kết quả: application-2026-09-28.0.log, application-2026-09-28.1.log -->
-            <fileNamePattern>logs/application-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-
-            <!-- 2. Giới hạn kích thước mỗi file tối đa 10MB theo yêu cầu đề bài -->
-            <maxFileSize>10MB</maxFileSize>
-
-            <!-- 3. Lưu trữ tối đa 30 ngày theo yêu cầu đề bài (log cũ hơn tự động bị xóa) -->
-            <maxHistory>30</maxHistory>
-
-            <!-- 4. Trần tổng dung lượng tối đa toàn bộ log lưu trữ (3GB) để bảo vệ đĩa cứng VPS -->
-            <totalSizeCap>3GB</totalSizeCap>
-        </rollingPolicy>
-
-        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-            <pattern>${FILE_LOG_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
-
-    <!-- Root Logger -->
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </root>
-
-</configuration>
+<!-- [YÊU CẦU ĐỀ BÀI] Thư viện Brave Tracing Bridge -->
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-tracing-bridge-brave</artifactId>
+</dependency>
 ```
 
-### Ý nghĩa của các chỉ số trong `fileNamePattern`:
-1. **`%d{yyyy-MM-dd}`**: Bộ chuyển đổi thời gian. Khi đồng hồ hệ thống chuyển sang ngày mới (00:00:00), Logback lập tức đóng file ngày cũ và kích hoạt phiên ghi mới.
-2. **`%i`**: Chỉ số thứ tự phân đoạn (bắt đầu từ `0`, `1`, `2`...). Khi file log trong cùng một ngày vượt quá ngưỡng `10MB`, Logback sẽ tăng chỉ số `%i` để sinh ra file mới dạng `application-2026-09-28.0.log`, `application-2026-09-28.1.log`...
-3. **`maxHistory = 30`**: Sau 30 ngày kể từ ngày tạo, các file lưu trữ sẽ tự động được thu dọn và xóa vĩnh viễn khỏi ổ cứng mà không cần người quản trị can thiệp thủ công.
+### 4.2. Cấu hình Cổng, Sampling và Log Pattern trong `application.yml`
+Cấu hình sampling 100% để mọi request đều được gắn traceId:
+```yaml
+# Cấu hình Micrometer Tracing
+management:
+  tracing:
+    sampling:
+      probability: 1.0 # 100% request được gắn TraceId & SpanId
 
----
-
-## 4. Hướng dẫn Kiểm thử Thực tế & Minh chứng Hoạt động
-
-### Bước 1: Khởi động Ứng dụng
-```bash
-mvn spring-boot:run
+# Cấu hình định dạng Log chuẩn: [Service-Name, traceId, spanId]
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%cyan(${spring.application.name}),%yellow(%X{traceId:-}),%green(%X{spanId:-})] %highlight(%-5level) %logger{36} - %msg%n"
 ```
 
----
-
-### Bước 2: Kiểm tra Trạng thái Thư mục Log ban đầu
-Gửi HTTP GET đến endpoint quản lý log:
-```bash
-curl -i http://localhost:8080/api/logs/status
-```
-
-**Kết quả trả về**:
-```json
-{
-  "exists": true,
-  "totalFiles": 1,
-  "totalSizeBytes": 236481,
-  "totalSizeFormatted": "230.94 KB",
-  "files": [
-    {
-      "fileName": "application.log",
-      "sizeBytes": 236481,
-      "sizeFormatted": "230.94 KB",
-      "isRotatedArchive": false
-    }
-  ]
-}
-```
-> File `application.log` đang hoạt động bình thường và dung lượng được theo dõi chặt chẽ.
-
----
-
-### Bước 3: Sinh tải Log hàng loạt mô phỏng lưu lượng cao
-Gửi HTTP POST để sinh 500 dòng log có cấu trúc:
-```bash
-curl -X POST "http://localhost:8080/api/logs/generate-bulk?count=500&prefix=ProductionBatch"
-```
-
-**Kết quả phản hồi**:
-```json
-{
-  "status": "SUCCESS",
-  "generatedLines": 500,
-  "timeTakenMs": 61,
-  "logDirectoryStatus": {
-    "exists": true,
-    "totalFiles": 1,
-    "totalSizeBytes": 236481,
-    "totalSizeFormatted": "230.94 KB",
-    "files": [
-      {
-        "fileName": "application.log",
-        "sizeBytes": 236481,
-        "sizeFormatted": "230.94 KB",
-        "isRotatedArchive": false
-      }
-    ]
-  }
+### 4.3. Lan truyền Header Tracing với `RestTemplateBuilder`
+Trong `GatewayServiceApplication.java` và `OrderServiceApplication.java`:
+```java
+@Bean
+public RestTemplate restTemplate(RestTemplateBuilder builder) {
+    // RestTemplateBuilder tự động cấu hình TraceRestTemplateCustomizer
+    // giúp đính kèm header traceparent/b3 vào mọi request HTTP gửi đi
+    return builder.build();
 }
 ```
 
 ---
 
-### Bước 4: Kiểm tra Nội dung File `logs/application.log`
-Mở file `logs/application.log`, dữ liệu log được định dạng đầy đủ bao gồm thời gian, Thread, RequestId (MDC) và nội dung nghiệp vụ:
+## 5. Hướng dẫn Khởi chạy & Kiểm thử Thực tế
+
+### Bước 1: Khởi chạy đồng thời 3 Microservices
+Sử dụng script PowerShell dựng sẵn:
+```powershell
+.\start-all.ps1
+```
+Hoặc mở 3 terminal riêng biệt và chạy:
+```bash
+# Terminal 1: User Service (Port 8082)
+cd user-service && mvn spring-boot:run
+
+# Terminal 2: Order Service (Port 8081)
+cd order-service && mvn spring-boot:run
+
+# Terminal 3: Gateway Service (Port 8080)
+cd gateway-service && mvn spring-boot:run
+```
+
+---
+
+### Bước 2: Kích hoạt Chuỗi Request bị lỗi (Tình huống đề bài)
+Gửi HTTP GET đến Gateway:
+```bash
+curl -i http://localhost:8080/api/gateway/demo-failure
+```
+
+**HTTP Response trả về từ Gateway (502 Bad Gateway do downstream User Service bị lỗi)**:
+```json
+{
+  "gatewayStatus": "DOWNSTREAM_ERROR",
+  "statusCode": 502,
+  "downstreamError": "{\"orderId\":\"ORD-7EB502BD\",\"service\":\"order-service\",\"errorMessage\":\"Failed to verify user from User Service: 400 BAD_REQUEST\",\"status\":\"ORDER_FAILED\"}"
+}
+```
+
+---
+
+### Bước 3: [KẾT QUẢ MONG MUỐN] Đối chiếu Console Log của cả 3 Microservices
+
+Quan sát màn hình console của cả 3 dịch vụ được ghi nhận trong thực tế:
+
+#### 1. Tại `gateway-service` (Port 8080):
 ```text
-2026-09-28 16:08:17.385 [main] [5a6f4c69-19eb-488a-acab-77134ec62bd9] INFO  c.s.p.service.LogRotationService - [BULK_LOG #43] TestBatch - Payload dữ liệu mô phỏng giao dịch thương mại điện tử với nhiều trường thông tin: orderId=ORD-BULK-43, amount=537.5, gateway=VNPay, status=PROCESSED
-2026-09-28 16:08:17.385 [main] [5a6f4c69-19eb-488a-acab-77134ec62bd9] INFO  c.s.p.service.LogRotationService - [BULK_LOG #44] TestBatch - Payload dữ liệu mô phỏng giao dịch thương mại điện tử với nhiều trường thông tin: orderId=ORD-BULK-44, amount=550.0, gateway=VNPay, status=PROCESSED
+2026-09-28 16:30:55.815 [http-nio-8080-exec-1] [gateway-service,6aba33cfc3ea052195f03259c620f93d,95f03259c620f93d] WARN  c.s.g.controller.GatewayController - [Gateway] [MÔ PHỎNG SỰ CỐ ĐỀ BÀI] Khởi động chuỗi request sẽ bị lỗi tại User Service...
+2026-09-28 16:30:55.817 [http-nio-8080-exec-1] [gateway-service,6aba33cfc3ea052195f03259c620f93d,95f03259c620f93d] INFO  c.s.g.controller.GatewayController - [Gateway] Nhận request checkout từ Client: userId=USER-BLOCKED-8888, amount=999.0, sinh orderId=ORD-7EB502BD
+2026-09-28 16:30:55.818 [http-nio-8080-exec-1] [gateway-service,6aba33cfc3ea052195f03259c620f93d,95f03259c620f93d] INFO  c.s.g.controller.GatewayController - [Gateway] Chuyển tiếp request sang Order Service tại: http://localhost:8081/api/orders/process
+2026-09-28 16:30:56.330 [http-nio-8080-exec-1] [gateway-service,6aba33cfc3ea052195f03259c620f93d,95f03259c620f93d] ERROR c.s.g.controller.GatewayController - [Gateway] Xảy ra lỗi từ chuỗi dịch vụ downstream: HttpStatusCode=502 BAD_GATEWAY...
 ```
 
-> **KẾT QUẢ ĐẠT ĐƯỢC**:
-> 1. Khi file đạt ngưỡng `10MB`, Logback sẽ tự động đóng file hiện tại và đổi tên thành dạng `application-yyyy-MM-dd.0.log`, sau đó mở lại file `application.log` mới.
-> 2. Các file log cũ hơn 30 ngày sẽ được tự động xóa hoàn toàn nhờ `maxHistory = 30`.
-> 3. Dung lượng tổng thể không bao giờ vượt quá trần `3GB`, loại bỏ vĩnh viễn sự cố sập VPS do Disk Full!
+#### 2. Tại `order-service` (Port 8081):
+```text
+2026-09-28 16:30:56.038 [http-nio-8081-exec-2] [order-service,6aba33cfc3ea052195f03259c620f93d,56e31d7a199da8ad] INFO  c.s.order.controller.OrderController - [OrderService] Bắt đầu xử lý đơn hàng orderId=ORD-7EB502BD, chuẩn bị gọi User Service xác thực...
+2026-09-28 16:30:56.039 [http-nio-8081-exec-2] [order-service,6aba33cfc3ea052195f03259c620f93d,56e31d7a199da8ad] INFO  c.s.order.controller.OrderController - [OrderService] Gọi User Service tại URL: http://localhost:8082/api/users/verify
+2026-09-28 16:30:56.295 [http-nio-8081-exec-2] [order-service,6aba33cfc3ea052195f03259c620f93d,56e31d7a199da8ad] ERROR c.s.order.controller.OrderController - [OrderService] GỌI USER SERVICE THẤT BẠI: HttpStatusCode=400 BAD_REQUEST...
+```
+
+#### 3. Tại `user-service` (Port 8082 - Nơi phát sinh lỗi):
+```text
+2026-09-28 16:30:56.242 [http-nio-8082-exec-3] [user-service,6aba33cfc3ea052195f03259c620f93d,e720e0747a15caad] INFO  c.s.user.controller.UserController - [UserService] Tiếp nhận yêu cầu xác thực người dùng: userId=USER-BLOCKED-8888, orderId=ORD-7EB502BD
+2026-09-28 16:30:56.243 [http-nio-8082-exec-3] [user-service,6aba33cfc3ea052195f03259c620f93d,e720e0747a15caad] ERROR c.s.user.controller.UserController - [UserService] GẶP LỖI: Người dùng USER-BLOCKED-8888 bị khóa tài khoản hoặc vi phạm quy tắc tín dụng!
+```
 
 ---
 
-## 5. Hướng dẫn Sử dụng Postman Collection
-Dự án cung cấp sẵn file **`Session18_HW4_LogRotation.postman_collection.json`**:
+### Bảng đối chiếu kết quả Tracing:
+
+| Microservice | Cổng | Định dạng Log | TraceId | SpanId | Trạng thái |
+| :--- | :---: | :--- | :---: | :---: | :---: |
+| **API Gateway** | `8080` | `[gateway-service, traceId, spanId]` | **`6aba33cfc3ea052195f03259c620f93d`** | `95f03259c620f93d` | `502 DOWNSTREAM_ERROR` |
+| **Order Service** | `8081` | `[order-service, traceId, spanId]` | **`6aba33cfc3ea052195f03259c620f93d`** | `56e31d7a199da8ad` | `400 ORDER_FAILED` |
+| **User Service** | `8082` | `[user-service, traceId, spanId]` | **`6aba33cfc3ea052195f03259c620f93d`** | `e720e0747a15caad` | `400 ERROR: BLOCKED` |
+
+> **KẾT LUẬN & MINH CHỨNG**:
+> 1. Định dạng log xuất ra hoàn toàn đúng yêu cầu: **`[Service-Name, traceId, spanId]`**.
+> 2. **`traceId` hoàn toàn giống hệt nhau (`6aba33cfc3ea052195f03259c620f93d`)** ở cả Gateway, Order và User Service cho cùng một chuỗi request.
+> 3. Không cần cài đặt server Zipkin phức tạp, các log được in ra terminal/file rõ ràng, cho phép tìm kiếm theo `traceId` để ghép nối 100% hành vi lỗi downstream!
+
+---
+
+## 6. Hướng dẫn Sử dụng Postman Collection
+Dự án cung cấp sẵn file **`Session18_HW5_DistributedTracing.postman_collection.json`**:
 1. Mở Postman và nhấn **Import**.
-2. Chọn file `Session18_HW4_LogRotation.postman_collection.json`.
-3. Kiểm thử 5 request được cấu hình sẵn:
-   - `01. Kiểm tra trạng thái thư mục logs/`
-   - `02. Sinh 500 dòng log mô phỏng giao dịch`
-   - `03. Sinh 2000 dòng log tải lớn (Bulk Load)`
-   - `04. Kích hoạt log ERROR và kiểm tra ghi file`
-   - `05. Kiểm tra lại danh sách file và dung lượng logs/`
+2. Chọn file `Session18_HW5_DistributedTracing.postman_collection.json`.
+3. Kiểm thử 4 request được cấu hình sẵn:
+   - `01. [TÌNH HUỐNG ĐỀ BÀI] Gọi chuỗi request bị lỗi tại User Service`
+   - `02. Gọi luồng Checkout thành công xuyên suốt 3 Service`
+   - `03. Gọi trực tiếp Order Service (Bỏ qua Gateway)`
+   - `04. Gọi trực tiếp User Service (Bỏ qua Gateway & Order)`
 
 ---
 
-## 6. Kiểm thử Tự động (Automated Verification)
-Chạy bộ kiểm thử tự động toàn diện bằng lệnh:
+## 7. Kiểm thử Tự động (Automated Verification)
+Thực thi kiểm thử biên dịch và chạy test toàn bộ 3 microservices:
 ```bash
 mvn clean test
 ```
-**Kết quả kiểm thử**:
+**Kết quả**:
 ```text
-[INFO] Running com.storex.payment.LogRotationTests
-[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.storex.payment.DiscordAppenderTests
-[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.storex.payment.PaymentApplicationTests
-[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.storex.payment.RequestIdFilterTests
-[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Reactor Summary for session18-hw5-tracing 1.0.0-SNAPSHOT:
+[INFO] 
+[INFO] session18-hw5-tracing .............................. SUCCESS [  0.165 s]
+[INFO] gateway-service .................................... SUCCESS [  9.753 s]
+[INFO] order-service ...................................... SUCCESS [  5.411 s]
+[INFO] user-service ....................................... SUCCESS [  5.817 s]
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------
-[INFO] Total time: 12.529 s
+[INFO] Total time: 21.545 s
 ```
 
 ---
 
-## 7. Kết luận
-- Việc chuyển đổi từ `FileAppender` sang **`RollingFileAppender`** kết hợp với **`SizeAndTimeBasedRollingPolicy`** là chuẩn mực bắt buộc trong triển khai ứng dụng doanh nghiệp (Production Readiness):
-  1. **Ngăn chặn triệt để sự cố Disk Full (40GB)** gây sập server VPS.
-  2. Phân đoạn file rõ ràng theo ngày và kích thước `10MB`, giúp các agent thu thập log như Filebeat/Logstash dễ dàng tiêu thụ và gửi sang Elasticsearch.
-  3. Duy trì hiệu năng I/O ổn định cho hệ thống lưu trữ của máy chủ.
+## 8. Kết luận
+- **Micrometer Tracing kết hợp Brave** là giải pháp chuẩn công nghiệp trên Spring Boot 3 thay thế hoàn hảo cho Spring Cloud Sleuth cũ.
+- Khả năng lan truyền context tự động qua HTTP giúp loại bỏ hoàn toàn "điểm mù" (blind spot) trong giám sát hệ thống phân tán, biến các file log rời rạc thành một bức tranh toàn cảnh đồng nhất và rõ ràng.

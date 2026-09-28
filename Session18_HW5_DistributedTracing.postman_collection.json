@@ -1,0 +1,140 @@
+{
+	"info": {
+		"_postman_id": "f5a6b7c8-d9e0-1f2a-3b4c-5d6e7f8a9b0c",
+		"name": "Session 18 - HW5: Distributed Tracing (Micrometer Tracing + Brave)",
+		"description": "Bộ sưu tập Postman thực hiện bài tập 5 Session 18:\nTruy vết phân tán (Distributed Tracing) qua 3 Microservices:\nClient -> Gateway Service (8080) -> Order Service (8081) -> User Service (8082 - Lỗi).\nCả 3 service tự động chia sẻ chung một traceId trong log.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. [TÌNH HUỐNG ĐỀ BÀI] Gọi chuỗi request bị lỗi tại User Service",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/gateway/demo-failure",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"gateway",
+						"demo-failure"
+					]
+				},
+				"description": "Mô phỏng tình huống đề bài: Client gọi API Gateway -> gọi Order Service -> gọi User Service. Một bước ở User Service bị lỗi.\nQuan sát log của cả 3 cửa sổ terminal: cùng 1 traceId xuất hiện xuyên suốt trên cả Gateway, Order và User Service theo định dạng [Service-Name, traceId, spanId]."
+			},
+			"response": []
+		},
+		{
+			"name": "02. Gọi luồng Checkout thành công xuyên suốt 3 Service",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"userId\": \"USER-BOB-999\",\n    \"amount\": 320.50,\n    \"shouldFail\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/api/gateway/checkout",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"gateway",
+						"checkout"
+					]
+				},
+				"description": "Gọi luồng hoàn tất thành công: Gateway -> Order -> User. Cả 3 service log đều in ra cùng một traceId mới."
+			},
+			"response": []
+		},
+		{
+			"name": "03. Gọi trực tiếp Order Service (Bỏ qua Gateway)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"orderId\": \"ORD-DIRECT-111\",\n    \"userId\": \"USER-CHARLIE\",\n    \"amount\": 150.00,\n    \"shouldFail\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8081/api/orders/process",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8081",
+					"path": [
+						"api",
+						"orders",
+						"process"
+					]
+				},
+				"description": "Gọi trực tiếp Order Service tại port 8081. Order Service tự sinh traceId và truyền sang User Service."
+			},
+			"response": []
+		},
+		{
+			"name": "04. Gọi trực tiếp User Service (Bỏ qua Gateway & Order)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"userId\": \"USER-DAVID\",\n    \"orderId\": \"ORD-STANDALONE-222\",\n    \"shouldFail\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8082/api/users/verify",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8082",
+					"path": [
+						"api",
+						"users",
+						"verify"
+					]
+				},
+				"description": "Gọi trực tiếp User Service tại port 8082 để kiểm tra service độc lập."
+			},
+			"response": []
+		}
+	]
+}

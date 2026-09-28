@@ -1,0 +1,26 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: order-service
+
+# Địa chỉ endpoint User Service
+services:
+  user-service:
+    url: ${USER_SERVICE_URL:http://localhost:8082}
+
+# Cấu hình Micrometer Tracing
+management:
+  tracing:
+    sampling:
+      probability: 1.0 # 100% request được gắn TraceId & SpanId
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics
+
+# Cấu hình định dạng Log chuẩn: [Service-Name, traceId, spanId]
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%cyan(${spring.application.name}),%yellow(%X{traceId:-}),%green(%X{spanId:-})] %highlight(%-5level) %logger{36} - %msg%n"

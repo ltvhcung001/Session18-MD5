@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: storex-payment-service
+
+# Cấu hình logging ban đầu: package com.storex.payment mặc định mức INFO
+logging:
+  level:
+    root: INFO
+    com.storex.payment: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{36}) - %msg%n"
+
+# Cấu hình Spring Boot Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        # BẬT EXPOSE ENDPOINT loggers cùng với health, info theo yêu cầu đề bài
+        include: health, info, loggers
+  endpoint:
+    loggers:
+      enabled: true
+    health:
+      show-details: always

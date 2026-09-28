@@ -1,0 +1,206 @@
+{
+	"info": {
+		"_postman_id": "b1a23c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+		"name": "Session 18 - HW1: Dynamic Log Level (Spring Boot Actuator)",
+		"description": "Bộ sưu tập Postman thực hiện bài tập 1 Session 18:\nThay đổi cấp độ log của package com.storex.payment sang DEBUG trong runtime mà không cần restart ứng dụng.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. Kiểm tra Log Level ban đầu của com.storex.payment",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/actuator/loggers/com.storex.payment",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"actuator",
+						"loggers",
+						"com.storex.payment"
+					]
+				},
+				"description": "Trả về cấp độ log hiện tại (configuredLevel và effectiveLevel là INFO)"
+			},
+			"response": []
+		},
+		{
+			"name": "02. Gọi thử API Payment (Trước khi đổi - Chỉ xuất hiện log INFO)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/payments/test",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"payments",
+						"test"
+					]
+				},
+				"description": "Quan sát console của ứng dụng: chỉ có log [INFO] xuất hiện, log [DEBUG] bị ẩn."
+			},
+			"response": []
+		},
+		{
+			"name": "03. [YÊU CẦU CHÍNH] Đổi Log Level của com.storex.payment sang DEBUG",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"configuredLevel\": \"DEBUG\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/actuator/loggers/com.storex.payment",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"actuator",
+						"loggers",
+						"com.storex.payment"
+					]
+				},
+				"description": "Gửi request HTTP POST để thay đổi runtime log level của com.storex.payment sang DEBUG mà KHÔNG CẦN RESTART ứng dụng. Response trả về mã HTTP 204 No Content."
+			},
+			"response": []
+		},
+		{
+			"name": "04. Xác nhận Log Level đã chuyển sang DEBUG",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/actuator/loggers/com.storex.payment",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"actuator",
+						"loggers",
+						"com.storex.payment"
+					]
+				},
+				"description": "Xác nhận configuredLevel và effectiveLevel đã chuyển sang DEBUG."
+			},
+			"response": []
+		},
+		{
+			"name": "05. Gọi lại API Payment (Sau khi đổi - Console LẬP TỨC xuất hiện log DEBUG)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/payments/test",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"payments",
+						"test"
+					]
+				},
+				"description": "Quan sát console ngay lập tức: các dòng log [DEBUG] chi tiết của com.storex.payment đã hiển thị mà không hề có thao tác restart nào."
+			},
+			"response": []
+		},
+		{
+			"name": "06. Gọi API Checkout POST (Chi tiết luồng xử lý DEBUG)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"orderId\": \"ORD-9999\",\n    \"amount\": 450.00,\n    \"customerId\": \"CUST-8888\",\n    \"gateway\": \"STRIPE\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/api/payments/checkout",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"payments",
+						"checkout"
+					]
+				},
+				"description": "Mô phỏng thanh toán thực tế với nhiều bước log DEBUG xác thực thẻ, số dư, kết nối gateway."
+			},
+			"response": []
+		},
+		{
+			"name": "07. [Dọn dẹp] Khôi phục lại Log Level về INFO",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"configuredLevel\": \"INFO\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/actuator/loggers/com.storex.payment",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"actuator",
+						"loggers",
+						"com.storex.payment"
+					]
+				},
+				"description": "Sau khi debug xong sự cố Production, chuyển log level trở về INFO để tránh đầy ổ cứng và giảm tải CPU."
+			},
+			"response": []
+		}
+	]
+}

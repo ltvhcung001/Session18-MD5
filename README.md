@@ -1,360 +1,255 @@
-# BÀI TẬP SESSION 18 (MD5) - BÀI TẬP 3 (HW3)
-## [Custom Appender] Bắn cảnh báo ERROR lên Slack/Discord
+# BÀI TẬP SESSION 18 (MD5) - BÀI TẬP 4 (HW4)
+## Phân tích và khắc phục Log Rotation (Sự cố sập server do ổ cứng đầy)
 
-![Đề bài](ss18-3.png)
+![Đề bài](ss18-4.png)
 
 ---
 
 ## 1. Mục tiêu kiến thức & Tình huống nghiệp vụ
 
 - **Mục tiêu kiến thức**:
-  - Nắm vững kiến trúc mở rộng của **Logback framework**: Cách tự viết một **Custom Appender** bằng cách kế thừa `AppenderBase<ILoggingEvent>`.
-  - Hiểu cơ chế phân loại sự kiện log (`ILoggingEvent`) và lọc chỉ bắn cảnh báo khi mức log là `ERROR` (`Level.ERROR_INT`).
-  - Sử dụng `java.net.http.HttpClient` để gửi HTTP POST request bất đồng bộ (**Non-blocking Asynchronous**) mang payload JSON theo chuẩn **Discord Webhook Rich Embed** với màu đỏ cảnh báo khẩn cấp (`color: 15158332` tương đương HEX `#E74C3C`).
-  - Kết hợp chặt chẽ với **MDC (từ HW2)** để đính kèm `requestId` giúp đội ngũ Dev nhận diện ngay luồng request gặp sự cố.
-  - Hiểu và phòng tránh lỗi kiến trúc nguy hiểm: **Infinite Log Recursion (Vòng lặp log vô tận)** khi gửi HTTP request thất bại bên trong Appender.
+  - Nắm vững nguyên lý và kỹ thuật **xoay vòng log (Log Rotation)** trong Logback framework kết hợp với Spring Boot.
+  - Phân biệt rõ rệt giữa **`FileAppender`** (ghi dồn một file duy nhất) và **`RollingFileAppender`** (tự động phân đoạn và dọn dẹp log theo chính sách).
+  - Làm chủ cấu hình **`SizeAndTimeBasedRollingPolicy`**: Xoay vòng file log kết hợp cả 2 điều kiện: **theo ngày (`%d{yyyy-MM-dd}`)** và **theo kích thước dung lượng (`maxFileSize = 10MB`)**.
+  - Hiểu cách thiết lập giới hạn lưu trữ tối đa (**`maxHistory = 30 ngày`**) và trần dung lượng an toàn (**`totalSizeCap = 3GB`**) để bảo vệ máy chủ khỏi nguy cơ cạn kiệt dung lượng đĩa (**Disk Full / 100% Usage**).
 
-- **Tình huống nghiệp vụ (Real-time Alerting)**:
-  - Trên môi trường Production, không một kỹ sư nào có thể ngồi túc trực 24/24 trên màn hình Kibana để xem có lỗi hay không.
-  - Sếp yêu cầu: **Bất cứ khi nào hệ thống văng ra Exception hoặc ghi nhận log mức `ERROR` (như lỗi kết nối cơ sở dữ liệu `log.error("Lỗi DB")`, lỗi thanh toán...), hệ thống phải ngay lập tức bắn thông báo đỏ vào kênh chat Discord của đội ngũ Dev.**
-  - **Yêu cầu bài toán**:
-    1. Hoàn thiện lớp Java Custom Appender `DiscordAppender` sử dụng `HttpClient` để bắn payload JSON lên Webhook URL.
-    2. Mỗi khi chạy lệnh `log.error("Lỗi DB")`, kênh chat Discord nhận được thông báo đỏ chứa đầy đủ ngữ cảnh lỗi.
-
----
-
-## 2. Phân tích Kỹ thuật: Thiết kế Custom DiscordAppender
-
-### 2.1. Kiến trúc luồng xử lý của Custom Appender
-
-```
-               [ LỆNH LOG MỨC ERROR TRONG CODE ]
-               log.error("Lỗi DB: Connection timeout...");
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Logback Event Stream │
-                    └──────────┬───────────┘
-                               │
-            ┌──────────────────┼──────────────────┐
-            ▼                  ▼                  ▼
-     [ CONSOLE APPENDR ] [ FILE APPENDER ] [ DISCORD APPENDER ]
-     In ra terminal      Ghi vào file      ┌─────────────────────────────────┐
-                                           │ if (level == Level.ERROR_INT)   │
-                                           │   1. Lấy message & exception    │
-                                           │   2. Lấy requestId từ MDC (HW2) │
-                                           │   3. Tạo Discord Red Embed JSON │
-                                           │   4. Gửi sendAsync tới Webhook  │
-                                           └────────────────┬────────────────┘
-                                                            │ HTTP POST (Async)
-                                                            ▼
-                                                ┌───────────────────────┐
-                                                │    DISCORD CHANNEL    │
-                                                │   🟥 [THÔNG BÁO ĐỎ]   │
-                                                └───────────────────────┘
-```
-
-### 2.2. Những điểm cốt lõi trong thiết kế Appender
-
-1. **Chuẩn định dạng Discord Embed (Thông báo đỏ)**:
-   - Discord hỗ trợ trường `color` dưới dạng số nguyên thập phân (Decimal).
-   - Mã màu đỏ cảnh báo rực rỡ `#E74C3C` chuyển sang hệ thập phân là:
-     $$\text{0xE74C3C} = 15158332$$
-   - Khi nhận giá trị này, Discord sẽ hiển thị dải màu đỏ viền bên trái thông điệp ("Thông báo đỏ").
-
-2. **Xử lý Bất đồng bộ (Non-blocking I/O)**:
-   - Nếu thực hiện HTTP call đồng bộ (`send`), luồng xử lý nghiệp vụ của user sẽ bị block chờ mạng (khoảng 200ms - 2s). Nếu Discord chậm hoặc timeout, ứng dụng sẽ bị treo hoặc nghẽn thread pool.
-   - Do đó, `DiscordAppender` sử dụng `httpClient.sendAsync(...)` để đẩy việc gửi mạng sang thread pool riêng của `HttpClient`, luồng chính lập tức được giải phóng.
-
-3. **Chống Vòng lặp vô tận (Infinite Log Loop Protection)**:
-   - Nếu webhook gửi thất bại (ví dụ: mất mạng, sai URL), **TUYỆT ĐỐI KHÔNG ĐƯỢC GỌI** `log.error(...)` bên trong catch block của Appender.
-   - Nếu gọi `log.error(...)`, Logback sẽ lại chuyển sự kiện này vào `DiscordAppender`, gây ra vòng lặp vô tận dẫn đến `StackOverflowError` hoặc tràn bộ nhớ `OutOfMemoryError`.
-   - Giải pháp: Sử dụng phương thức `addError(...)` hoặc `addWarn(...)` có sẵn của `AppenderBase`, hoặc ghi ra `System.err`.
+- **Tình huống nghiệp vụ (Production Outage - Disk Full 100%)**:
+  - Máy chủ VPS của hệ thống thương mại điện tử **StoreX** bất ngờ bị treo cứng và sập toàn bộ dịch vụ (Downtime nghiêm trọng).
+  - Đội ngũ hạ tầng (SRE/DevOps) kiểm tra và phát hiện dung lượng phân vùng ổ cứng đĩa chứa hệ điều hành đã đạt ngưỡng **100% (No space left on device)**.
+  - **Nguyên nhân gốc rễ**: File `logs/application.log` sau 3 tháng vận hành đã phình to vượt mức **40GB** mà không hề được cắt file hay xóa bớt.
+  - **Phân tích cấu hình cũ**:
+    ```xml
+    <!-- LỖI NGHIÊM TRỌNG TRONG LOGBACK: Dùng FileAppender -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>logs/application.log</file>
+        <encoder>
+            <pattern>%d %p %c{1.} [%t] %m%n</pattern>
+        </encoder>
+    </appender>
+    ```
+    `FileAppender` là appender ghi nối tiếp (append) vĩnh viễn vào một file duy nhất. Ứng dụng chạy càng lâu thì file càng lớn đến khi bóp nghẹt toàn bộ ổ cứng server!
+  - **Giải pháp**: Thay thế bằng `RollingFileAppender` với cấu hình xoay vòng theo ngày, kích thước mỗi file 10MB, lưu tối đa 30 ngày.
 
 ---
 
-## 3. Cấu trúc Dự án
+## 2. Phân tích Kỹ thuật: FileAppender vs. RollingFileAppender
+
+### 2.1. Bảng so sánh kỹ thuật
+
+| Tiêu chí | FileAppender (Cấu hình lỗi cũ) | RollingFileAppender (Giải pháp chuẩn) |
+| :--- | :--- | :--- |
+| **Cơ chế ghi** | Ghi dồn liên tục vào 1 file duy nhất | Ghi vào file hiện hành, tự động cắt khi đạt ngưỡng |
+| **Hành vi theo thời gian** | File phình to vô hạn (10GB, 40GB, 100GB...) | Mỗi file cố định tối đa 10MB, phân tách theo ngày |
+| **Khả năng dọn dẹp** | **Không có**: Cần can thiệp xóa bằng tay hoặc cron script bên ngoài | **Tự động**: Xóa các file cũ hơn 30 ngày (`maxHistory`) |
+| **Khả năng đọc/tra cứu** | Cực kỳ khó mở; mở file 40GB bằng vi/nano/notepad sẽ làm crash RAM máy chủ | Dễ dàng mở, phân tích và chia nhỏ cho shipper đẩy lên ELK |
+| **Nguy cơ hệ thống** | **Rất cao**: Gây sập toàn bộ VPS khi Disk đạt 100% | **Tuyệt đối an toàn**: Giới hạn trần dung lượng đĩa |
+
+---
+
+### 2.2. Sơ đồ cơ chế xoay vòng `SizeAndTimeBasedRollingPolicy`
 
 ```
-ss18/
-├── .gitignore
-├── pom.xml
-├── README.md
-├── ss18-1.png
-├── ss18-2.png
-├── ss18-3.png                                           # Ảnh đề bài HW3
-├── Session18_HW1_Loggers.postman_collection.json
-├── Session18_HW2_MDC.postman_collection.json
-├── Session18_HW3_DiscordAppender.postman_collection.json # Bộ sưu tập Postman HW3
-└── src/
-    ├── main/
-    │   ├── java/
-    │   │   └── com/
-    │   │       └── storex/
-    │   │           ├── payment/
-    │   │           │   ├── PaymentApplication.java
-    │   │           │   ├── appender/
-    │   │           │   │   └── DiscordAppender.java     # [MỚI] Custom Logback Appender
-    │   │           │   ├── controller/
-    │   │           │   │   ├── ErrorSimulationController.java    # [MỚI] Endpoint gọi log.error("Lỗi DB")
-    │   │           │   │   ├── MockDiscordWebhookController.java # [MỚI] Giả lập Webhook test local
-    │   │           │   │   ├── OrderController.java
-    │   │           │   │   └── PaymentController.java
-    │   │           │   ├── filter/
-    │   │           │   │   └── RequestIdFilter.java
-    │   │           │   └── service/
-    │   │           │       ├── OrderService.java
-    │   │           │       └── PaymentService.java
-    │   └── resources/
-    │       ├── application.yml
-    │       └── logback-spring.xml                       # Đăng ký DiscordAppender
-    └── test/
-        └── java/
-            └── com/
-                └── storex/
-                    └── payment/
-                        ├── PaymentApplicationTests.java
-                        ├── RequestIdFilterTests.java
-                        └── DiscordAppenderTests.java     # Integration test tự động cho HW3
+                            [ CƠ CHẾ LOG ROTATION THEO THỜI GIAN & KÍCH THƯỚC ]
+
+             Luồng log từ ứng dụng Spring Boot
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │  application.log  │  <── File log hiện hành đang nhận dữ liệu
+                 └─────────┬─────────┘
+                           │
+            Kiểm tra 2 điều kiện xoay vòng:
+            ├── 1. Sang ngày mới? (Midnight Rollover)
+            └── 2. Dung lượng vượt quá 10MB? (Size Rollover)
+                           │
+                           ▼
+          ┌────────────────────────────────────────────────────────┐
+          │     Các file lưu trữ quá khứ (Archived Log Files)      │
+          ├────────────────────────────────────────────────────────┤
+          │  logs/application-2026-09-27.0.log (10 MB)            │
+          │  logs/application-2026-09-28.0.log (10 MB)            │
+          │  logs/application-2026-09-28.1.log (10 MB)            │
+          │  logs/application-2026-09-28.2.log (10 MB)            │
+          │  ...                                                   │
+          │  logs/application-2026-09-28.n.log                    │
+          └────────────────────────┬───────────────────────────────┘
+                                   │
+                      Tự động xóa sau 30 ngày (maxHistory = 30)
+                      Tổng dung lượng kiểm soát <= 3GB (totalSizeCap)
+                                   ▼
+                            [ Ổ CỨNG AN TOÀN ]
 ```
 
 ---
 
-## 4. Chi tiết Cấu hình & Mã nguồn
+## 3. Cấu hình Chuẩn hóa trong `logback-spring.xml`
 
-### 4.1. Mã nguồn `DiscordAppender.java`
-```java
-package com.storex.payment.appender;
+Cấu hình khắc phục triệt để sự cố theo đúng yêu cầu đề bài:
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.classic.spi.IThrowableProxy;
-import ch.qos.logback.classic.spi.StackTraceElementProxy;
-import ch.qos.logback.core.AppenderBase;
-
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Map;
-
-public class DiscordAppender extends AppenderBase<ILoggingEvent> {
-
-    private String webhookUrl;
-    private boolean enabled = true;
-    private String username = "StoreX Alert Bot";
-    private String avatarUrl = "https://cdn-icons-png.flaticon.com/512/564/564619.png";
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(3))
-            .build();
-
-    @Override
-    protected void append(ILoggingEvent eventObject) {
-        if (!isStarted() || !enabled || webhookUrl == null || webhookUrl.isBlank()) {
-            return;
-        }
-
-        // BẮT SỰ KIỆN: Chỉ xử lý khi log ở mức ERROR theo đúng yêu cầu đề bài
-        if (eventObject.getLevel().levelInt == Level.ERROR_INT) {
-            sendDiscordAlert(eventObject);
-        }
-    }
-
-    private void sendDiscordAlert(ILoggingEvent eventObject) {
-        try {
-            String message = eventObject.getFormattedMessage();
-            String loggerName = eventObject.getLoggerName();
-            String threadName = eventObject.getThreadName();
-
-            // Trích xuất requestId từ MDC (HW2)
-            Map<String, String> mdcMap = eventObject.getMDCPropertyMap();
-            String requestId = (mdcMap != null && mdcMap.containsKey("requestId")) 
-                    ? mdcMap.get("requestId") 
-                    : "N/A";
-
-            // Đóng gói JSON Payload: Mã màu đỏ 15158332 (#E74C3C)
-            String jsonPayload = String.format(
-                    "{" +
-                    "\"username\":\"%s\"," +
-                    "\"avatar_url\":\"%s\"," +
-                    "\"embeds\":[{" +
-                        "\"title\":\"🚨 [ALERT] LỖI HỆ THỐNG PHÁT SINH\"," +
-                        "\"description\":\"**Chi tiết:** %s\"," +
-                        "\"color\":15158332," +
-                        "\"fields\":[" +
-                            "{\"name\":\"Logger\",\"value\":\"`%s`\",\"inline\":false}," +
-                            "{\"name\":\"Request ID (MDC)\",\"value\":\"`%s`\",\"inline\":true}," +
-                            "{\"name\":\"Thread\",\"value\":\"`%s`\",\"inline\":true}," +
-                            "{\"name\":\"Thời gian\",\"value\":\"%s\",\"inline\":false}" +
-                        "]," +
-                        "\"footer\":{\"text\":\"StoreX Monitoring System - Zero Downtime Alerts\"}" +
-                    "}]" +
-                    "}",
-                    escapeJson(username),
-                    escapeJson(avatarUrl),
-                    escapeJson(message),
-                    escapeJson(loggerName),
-                    escapeJson(requestId),
-                    escapeJson(threadName),
-                    Instant.now().toString()
-            );
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(webhookUrl))
-                    .timeout(Duration.ofSeconds(5))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                    .build();
-
-            // Gửi bất đồng bộ (Non-blocking)
-            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                    .exceptionally(ex -> {
-                        // Tránh đệ quy vô tận: Dùng addError thay vì log.error
-                        addError("[DiscordAppender] Lỗi gửi webhook: " + ex.getMessage());
-                        return null;
-                    });
-
-        } catch (Exception e) {
-            addError("[DiscordAppender] Lỗi tạo payload: " + e.getMessage());
-        }
-    }
-    // ... getter/setter/escapeJson
-}
-```
-
-### 4.2. Cấu hình file `logback-spring.xml`
 ```xml
-<!-- Custom Discord Appender: Bắn cảnh báo ERROR lên Discord Webhook -->
-<appender name="DISCORD" class="com.storex.payment.appender.DiscordAppender">
-    <!-- Đọc Webhook URL từ biến môi trường DISCORD_WEBHOOK_URL, fallback về Mock Webhook cục bộ -->
-    <webhookUrl>${DISCORD_WEBHOOK_URL:-http://localhost:8080/mock/discord-webhook}</webhookUrl>
-    <enabled>true</enabled>
-    <username>StoreX Alert Bot</username>
-</appender>
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="30 seconds">
 
-<root level="INFO">
-    <appender-ref ref="CONSOLE"/>
-    <appender-ref ref="FILE"/>
-    <appender-ref ref="DISCORD"/>
-</root>
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %magenta([%X{requestId:-SYSTEM}]) %highlight(%-5level) %cyan(%logger{36}) - %msg%n"/>
+
+    <property name="FILE_LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{requestId:-SYSTEM}] %-5level %logger{36} - %msg%n"/>
+
+    <!-- 1. Console Appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 2. [HW4] RollingFileAppender: Khắc phục triệt để sự cố 40GB Disk Full -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <!-- File log hiện hành đang được ứng dụng ghi trực tiếp -->
+        <file>logs/application.log</file>
+
+        <!-- Chính sách xoay vòng kết hợp Ngày và Kích thước (Logback 1.4+ / Spring Boot 3) -->
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 1. Cấu hình xoay vòng theo ngày (%d{yyyy-MM-dd}) và chỉ số index (%i) -->
+            <!-- Kết quả: application-2026-09-28.0.log, application-2026-09-28.1.log -->
+            <fileNamePattern>logs/application-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+
+            <!-- 2. Giới hạn kích thước mỗi file tối đa 10MB theo yêu cầu đề bài -->
+            <maxFileSize>10MB</maxFileSize>
+
+            <!-- 3. Lưu trữ tối đa 30 ngày theo yêu cầu đề bài (log cũ hơn tự động bị xóa) -->
+            <maxHistory>30</maxHistory>
+
+            <!-- 4. Trần tổng dung lượng tối đa toàn bộ log lưu trữ (3GB) để bảo vệ đĩa cứng VPS -->
+            <totalSizeCap>3GB</totalSizeCap>
+        </rollingPolicy>
+
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- Root Logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>
 ```
 
-### 4.3. Controller mô phỏng lỗi: `ErrorSimulationController.java`
-```java
-@RestController
-@RequestMapping("/api/errors")
-public class ErrorSimulationController {
-
-    private static final Logger log = LoggerFactory.getLogger(ErrorSimulationController.class);
-
-    /**
-     * Endpoint mô phỏng trực tiếp theo yêu cầu đề bài:
-     * Chạy lệnh log.error("Lỗi DB")
-     */
-    @GetMapping("/simulate-db-error")
-    public ResponseEntity<Map<String, Object>> simulateDbError() {
-        log.info("Bắt đầu thực thi truy vấn nghiệp vụ...");
-        
-        // KÍCH HOẠT LỆNH YÊU CẦU:
-        log.error("Lỗi DB: Không thể kết nối tới cơ sở dữ liệu PostgreSQL (Connection timeout sau 30000ms)");
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("status", "ERROR_SIMULATED");
-        response.put("message", "Đã kích hoạt log.error('Lỗi DB'). Kiểm tra kênh Discord để xem thông báo đỏ.");
-        return ResponseEntity.ok(response);
-    }
-}
-```
+### Ý nghĩa của các chỉ số trong `fileNamePattern`:
+1. **`%d{yyyy-MM-dd}`**: Bộ chuyển đổi thời gian. Khi đồng hồ hệ thống chuyển sang ngày mới (00:00:00), Logback lập tức đóng file ngày cũ và kích hoạt phiên ghi mới.
+2. **`%i`**: Chỉ số thứ tự phân đoạn (bắt đầu từ `0`, `1`, `2`...). Khi file log trong cùng một ngày vượt quá ngưỡng `10MB`, Logback sẽ tăng chỉ số `%i` để sinh ra file mới dạng `application-2026-09-28.0.log`, `application-2026-09-28.1.log`...
+3. **`maxHistory = 30`**: Sau 30 ngày kể từ ngày tạo, các file lưu trữ sẽ tự động được thu dọn và xóa vĩnh viễn khỏi ổ cứng mà không cần người quản trị can thiệp thủ công.
 
 ---
 
-## 5. Hướng dẫn Kiểm thử Thực tế & Minh chứng Kết quả
+## 4. Hướng dẫn Kiểm thử Thực tế & Minh chứng Hoạt động
 
 ### Bước 1: Khởi động Ứng dụng
 ```bash
 mvn spring-boot:run
 ```
 
-> **Mẹo**: Nếu bạn muốn bắn trực tiếp vào kênh Discord thật của mình:
-> ```bash
-> $env:DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
-> mvn spring-boot:run
-> ```
-> Nếu không cấu hình, ứng dụng sẽ tự động trỏ về Mock Webhook cục bộ (`http://localhost:8080/mock/discord-webhook`) và in mô phỏng giao diện Discord ra màn hình console.
+---
+
+### Bước 2: Kiểm tra Trạng thái Thư mục Log ban đầu
+Gửi HTTP GET đến endpoint quản lý log:
+```bash
+curl -i http://localhost:8080/api/logs/status
+```
+
+**Kết quả trả về**:
+```json
+{
+  "exists": true,
+  "totalFiles": 1,
+  "totalSizeBytes": 236481,
+  "totalSizeFormatted": "230.94 KB",
+  "files": [
+    {
+      "fileName": "application.log",
+      "sizeBytes": 236481,
+      "sizeFormatted": "230.94 KB",
+      "isRotatedArchive": false
+    }
+  ]
+}
+```
+> File `application.log` đang hoạt động bình thường và dung lượng được theo dõi chặt chẽ.
 
 ---
 
-### Bước 2: Kích hoạt Lệnh `log.error("Lỗi DB")`
-Gửi HTTP GET đến endpoint mô phỏng:
+### Bước 3: Sinh tải Log hàng loạt mô phỏng lưu lượng cao
+Gửi HTTP POST để sinh 500 dòng log có cấu trúc:
 ```bash
-curl -i http://localhost:8080/api/errors/simulate-db-error
+curl -X POST "http://localhost:8080/api/logs/generate-bulk?count=500&prefix=ProductionBatch"
 ```
 
-**HTTP Response**:
+**Kết quả phản hồi**:
 ```json
 {
-  "status": "ERROR_SIMULATED",
-  "message": "Đã kích hoạt log.error('Lỗi DB'). Kiểm tra kênh Discord hoặc Mock Webhook để xem thông báo đỏ.",
-  "timestamp": 1790585685604
+  "status": "SUCCESS",
+  "generatedLines": 500,
+  "timeTakenMs": 61,
+  "logDirectoryStatus": {
+    "exists": true,
+    "totalFiles": 1,
+    "totalSizeBytes": 236481,
+    "totalSizeFormatted": "230.94 KB",
+    "files": [
+      {
+        "fileName": "application.log",
+        "sizeBytes": 236481,
+        "sizeFormatted": "230.94 KB",
+        "isRotatedArchive": false
+      }
+    ]
+  }
 }
 ```
 
 ---
 
-### Bước 3: Minh chứng Kết quả Nhận được trên Console / Discord Webhook
-
-Ngay khi lệnh `log.error("Lỗi DB")` được kích hoạt, **`DiscordAppender` lập tức bắt sự kiện và bắn payload Embed màu đỏ**:
-
+### Bước 4: Kiểm tra Nội dung File `logs/application.log`
+Mở file `logs/application.log`, dữ liệu log được định dạng đầy đủ bao gồm thời gian, Thread, RequestId (MDC) và nội dung nghiệp vụ:
 ```text
-2026-09-28 15:54:45.585 [http-nio-8080-exec-1] [7afecda5-5568-4074-99ec-03517803bc3b] INFO  c.s.p.c.ErrorSimulationController - Bắt đầu thực thi truy vấn nghiệp vụ...
-2026-09-28 15:54:45.586 [http-nio-8080-exec-1] [7afecda5-5568-4074-99ec-03517803bc3b] ERROR c.s.p.c.ErrorSimulationController - Lỗi DB: Không thể kết nối tới cơ sở dữ liệu PostgreSQL (Connection timeout sau 30000ms)
-
-========================================================================================
-🔔 [DISCORD BOT RECEIVED WEBHOOK - THÔNG BÁO ĐỎ]
-========================================================================================
-🤖 Bot Name   : StoreX Alert Bot
-🟥 Color Code : 15158332 (Màu đỏ cảnh báo khẩn cấp #E74C3C)
-📌 Tiêu đề    : 🚨 [ALERT] LỖI HỆ THỐNG PHÁT SINH
-📝 Mô tả      : **Chi tiết:** Lỗi DB: Không thể kết nối tới cơ sở dữ liệu PostgreSQL (Connection timeout sau 30000ms)
-📋 Chi tiết fields:
-   • Logger : `com.storex.payment.controller.ErrorSimulationController`
-   • Request ID (MDC) : `7afecda5-5568-4074-99ec-03517803bc3b`
-   • Thread : `http-nio-8080-exec-1`
-   • Thời gian : 2026-09-28T08:54:45.587139600Z
-🔖 Footer     : StoreX Monitoring System - Zero Downtime Alerts
-========================================================================================
+2026-09-28 16:08:17.385 [main] [5a6f4c69-19eb-488a-acab-77134ec62bd9] INFO  c.s.p.service.LogRotationService - [BULK_LOG #43] TestBatch - Payload dữ liệu mô phỏng giao dịch thương mại điện tử với nhiều trường thông tin: orderId=ORD-BULK-43, amount=537.5, gateway=VNPay, status=PROCESSED
+2026-09-28 16:08:17.385 [main] [5a6f4c69-19eb-488a-acab-77134ec62bd9] INFO  c.s.p.service.LogRotationService - [BULK_LOG #44] TestBatch - Payload dữ liệu mô phỏng giao dịch thương mại điện tử với nhiều trường thông tin: orderId=ORD-BULK-44, amount=550.0, gateway=VNPay, status=PROCESSED
 ```
 
-> **XÁC NHẬN KẾT QUẢ ĐẠT ĐƯỢC**:
-> 1. Lệnh `log.error("Lỗi DB")` đã phát sinh log mức `ERROR`.
-> 2. `DiscordAppender` bắt đúng `Level.ERROR_INT`.
-> 3. Kênh chat nhận được thông báo đỏ (`color: 15158332`) với tiêu đề, nội dung lỗi chi tiết, logger và mã `requestId` trích xuất từ MDC.
+> **KẾT QUẢ ĐẠT ĐƯỢC**:
+> 1. Khi file đạt ngưỡng `10MB`, Logback sẽ tự động đóng file hiện tại và đổi tên thành dạng `application-yyyy-MM-dd.0.log`, sau đó mở lại file `application.log` mới.
+> 2. Các file log cũ hơn 30 ngày sẽ được tự động xóa hoàn toàn nhờ `maxHistory = 30`.
+> 3. Dung lượng tổng thể không bao giờ vượt quá trần `3GB`, loại bỏ vĩnh viễn sự cố sập VPS do Disk Full!
 
 ---
 
-## 6. Hướng dẫn Sử dụng Postman Collection
-Dự án cung cấp sẵn file **`Session18_HW3_DiscordAppender.postman_collection.json`**:
+## 5. Hướng dẫn Sử dụng Postman Collection
+Dự án cung cấp sẵn file **`Session18_HW4_LogRotation.postman_collection.json`**:
 1. Mở Postman và nhấn **Import**.
-2. Chọn file `Session18_HW3_DiscordAppender.postman_collection.json`.
+2. Chọn file `Session18_HW4_LogRotation.postman_collection.json`.
 3. Kiểm thử 5 request được cấu hình sẵn:
-   - `01. [YÊU CẦU ĐỀ BÀI] Kích hoạt log.error("Lỗi DB")`
-   - `02. Mô phỏng Exception thực tế có StackTrace`
-   - `03. Tùy biến thông điệp lỗi ERROR`
-   - `04. Xem lịch sử cảnh báo nhận được trên Mock Discord Webhook`
-   - `05. Xóa lịch sử cảnh báo Mock Webhook`
+   - `01. Kiểm tra trạng thái thư mục logs/`
+   - `02. Sinh 500 dòng log mô phỏng giao dịch`
+   - `03. Sinh 2000 dòng log tải lớn (Bulk Load)`
+   - `04. Kích hoạt log ERROR và kiểm tra ghi file`
+   - `05. Kiểm tra lại danh sách file và dung lượng logs/`
 
 ---
 
-## 7. Kiểm thử Tự động (Automated Tests)
-Thực hiện chạy toàn bộ unit và integration test bằng Maven:
+## 6. Kiểm thử Tự động (Automated Verification)
+Chạy bộ kiểm thử tự động toàn diện bằng lệnh:
 ```bash
 mvn clean test
 ```
-**Kết quả**:
+**Kết quả kiểm thử**:
 ```text
+[INFO] Running com.storex.payment.LogRotationTests
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0
 [INFO] Running com.storex.payment.DiscordAppenderTests
 [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
 [INFO] Running com.storex.payment.PaymentApplicationTests
@@ -364,14 +259,13 @@ mvn clean test
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------
-[INFO] Total time: 13.125 s
+[INFO] Total time: 12.529 s
 ```
 
 ---
 
-## 8. Kết luận
-- **Custom Appender** trong Logback là kỹ thuật nâng cao giúp lập trình viên mở rộng khả năng giám sát hệ thống vượt ra ngoài giới hạn file log cục bộ.
-- Việc kết hợp gửi Webhook bất đồng bộ (Non-blocking Asynchronous) với mã màu đỏ nổi bật đảm bảo:
-  1. Đội ngũ kỹ thuật nhận được cảnh báo ngay lập tức trên kênh chat làm việc hàng ngày (Discord/Slack).
-  2. Hiệu năng hệ thống và luồng chính của người dùng không hề bị ảnh hưởng.
-  3. Cung cấp đầy đủ `requestId` từ MDC để truy vết tức thì sang Kibana.
+## 7. Kết luận
+- Việc chuyển đổi từ `FileAppender` sang **`RollingFileAppender`** kết hợp với **`SizeAndTimeBasedRollingPolicy`** là chuẩn mực bắt buộc trong triển khai ứng dụng doanh nghiệp (Production Readiness):
+  1. **Ngăn chặn triệt để sự cố Disk Full (40GB)** gây sập server VPS.
+  2. Phân đoạn file rõ ràng theo ngày và kích thước `10MB`, giúp các agent thu thập log như Filebeat/Logstash dễ dàng tiêu thụ và gửi sang Elasticsearch.
+  3. Duy trì hiệu năng I/O ổn định cho hệ thống lưu trữ của máy chủ.

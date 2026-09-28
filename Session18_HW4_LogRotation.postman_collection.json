@@ -1,0 +1,140 @@
+{
+	"info": {
+		"_postman_id": "e4f5a6b7-c8d9-0e1f-2a3b-4c5d6e7f8a9b",
+		"name": "Session 18 - HW4: Log Rotation (Khắc phục tràn ổ cứng)",
+		"description": "Bộ sưu tập Postman thực hiện bài tập 4 Session 18:\nKiểm chứng cơ chế RollingFileAppender và SizeAndTimeBasedRollingPolicy cắt file theo ngày và 10MB, lưu tối đa 30 ngày để chống sập server do Disk Full.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. Kiểm tra trạng thái thư mục logs/",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/logs/status",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"logs",
+						"status"
+					]
+				},
+				"description": "Xem danh sách các file log hiện có, dung lượng từng file và tổng dung lượng thư mục logs/."
+			},
+			"response": []
+		},
+		{
+			"name": "02. Sinh 500 dòng log mô phỏng giao dịch",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/logs/generate-bulk?count=500&prefix=BulkOrder",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"logs",
+						"generate-bulk"
+					],
+					"query": [
+						{
+							"key": "count",
+							"value": "500"
+						},
+						{
+							"key": "prefix",
+							"value": "BulkOrder"
+						}
+					]
+				},
+				"description": "Ghi đồng loạt 500 dòng log giao dịch vào file logs/application.log để kiểm chứng tốc độ ghi và tăng dung lượng file."
+			},
+			"response": []
+		},
+		{
+			"name": "03. Sinh 2000 dòng log tải lớn (Bulk Load)",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/logs/generate-bulk?count=2000&prefix=HighLoadSim",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"logs",
+						"generate-bulk"
+					],
+					"query": [
+						{
+							"key": "count",
+							"value": "2000"
+						},
+						{
+							"key": "prefix",
+							"value": "HighLoadSim"
+						}
+					]
+				},
+				"description": "Mô phỏng đợt truy cập cao điểm, ghi 2000 dòng log để kiểm chứng sự an toàn của RollingFileAppender."
+			},
+			"response": []
+		},
+		{
+			"name": "04. Kích hoạt log ERROR và kiểm tra ghi file",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/errors/simulate-db-error",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"errors",
+						"simulate-db-error"
+					]
+				},
+				"description": "Kích hoạt log mức ERROR. Vừa được ghi vào file application.log, vừa được DiscordAppender bắn cảnh báo đỏ."
+			},
+			"response": []
+		},
+		{
+			"name": "05. Kiểm tra lại danh sách file và dung lượng logs/",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/logs/status",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"logs",
+						"status"
+					]
+				},
+				"description": "Kiểm tra lại dung lượng file application.log sau khi đã ghi nhiều đợt tải."
+			},
+			"response": []
+		}
+	]
+}

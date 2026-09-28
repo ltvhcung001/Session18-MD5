@@ -1,0 +1,130 @@
+{
+	"info": {
+		"_postman_id": "c2b3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+		"name": "Session 18 - HW2: Theo vết Request với MDC (Logback Tracing)",
+		"description": "Bộ sưu tập Postman thực hiện bài tập 2 Session 18:\nGắn định danh duy nhất (requestId/traceId dạng UUID) vào MDC của Logback và xuất hiện trong mọi dòng log của request để dễ dàng lọc trên Kibana.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. Mô phỏng Giao dịch thất bại (Transaction Failed)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/orders/fail-demo",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"orders",
+						"fail-demo"
+					]
+				},
+				"description": "Mô phỏng tình huống đề bài: Giao dịch thất bại 'Transaction Failed'. Quan sát console để thấy mọi dòng log từ tiếp nhận đơn, kiểm tra tồn kho, cổng báo lỗi đến Transaction Failed đều có chung một UUID requestId ở đầu. Header X-Request-Id cũng được trả về cho client."
+			},
+			"response": []
+		},
+		{
+			"name": "02. Đặt hàng thành công (POST Checkout)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"userId\": \"USER-ALICE-123\",\n    \"orderId\": \"ORD-2026-9999\",\n    \"amount\": 520.00,\n    \"shouldFail\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/api/orders/checkout",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"orders",
+						"checkout"
+					]
+				},
+				"description": "Đặt hàng thành công, toàn bộ log từ OrderController, OrderService, PaymentService đều chung một UUID."
+			},
+			"response": []
+		},
+		{
+			"name": "03. Client tự gửi X-Request-Id (Distributed Tracing)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "X-Request-Id",
+						"value": "CLIENT-CUSTOM-TRACE-9999"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"userId\": \"USER-BOB-456\",\n    \"orderId\": \"ORD-2026-8888\",\n    \"amount\": 199.99,\n    \"shouldFail\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/api/orders/checkout",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"orders",
+						"checkout"
+					]
+				},
+				"description": "Mô phỏng trường hợp API Gateway hoặc Client truyền sẵn header X-Request-Id. Filter sẽ tái sử dụng và đưa vào MDC, console in [CLIENT-CUSTOM-TRACE-9999]."
+			},
+			"response": []
+		},
+		{
+			"name": "04. Kiểm tra endpoint Payment từ HW1 (Vẫn có requestId)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/payments/test",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"payments",
+						"test"
+					]
+				},
+				"description": "Kiểm tra các endpoint cũ từ HW1 vẫn được gắn UUID requestId hoàn toàn tự động qua RequestIdFilter."
+			},
+			"response": []
+		}
+	]
+}

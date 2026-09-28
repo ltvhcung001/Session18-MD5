@@ -1,0 +1,134 @@
+{
+	"info": {
+		"_postman_id": "d3c4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f",
+		"name": "Session 18 - HW3: Custom Logback DiscordAppender (Real-time Alert)",
+		"description": "Bộ sưu tập Postman thực hiện bài tập 3 Session 18:\nCustom Logback Appender tự động gửi thông báo đỏ lên Discord/Slack Webhook mỗi khi hệ thống phát sinh log mức ERROR.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "01. [YÊU CẦU ĐỀ BÀI] Kích hoạt log.error(\"Lỗi DB\")",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/errors/simulate-db-error",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"errors",
+						"simulate-db-error"
+					]
+				},
+				"description": "Thực thi phương thức gọi log.error(\"Lỗi DB\"). DiscordAppender lập tức bắt sự kiện log ERROR và bắn JSON Embed màu đỏ (#E74C3C / 15158332) lên Discord Webhook."
+			},
+			"response": []
+		},
+		{
+			"name": "02. Mô phỏng Exception thực tế có StackTrace",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/api/errors/simulate-exception",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"errors",
+						"simulate-exception"
+					]
+				},
+				"description": "Mô phỏng trường hợp ném ngoại lệ SQLException và log.error kèm Exception. Payload Discord sẽ hiển thị trường Exception chi tiết."
+			},
+			"response": []
+		},
+		{
+			"name": "03. Tùy biến thông điệp lỗi ERROR",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"message\": \"Lỗi DB: Bảng payment_transactions bị khóa do deadlock giao dịch ngân hàng\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/api/errors/trigger",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"api",
+						"errors",
+						"trigger"
+					]
+				},
+				"description": "Gửi thông điệp tùy ý để hệ thống ghi log mức ERROR và bắn cảnh báo tương ứng lên Discord."
+			},
+			"response": []
+		},
+		{
+			"name": "04. Xem lịch sử cảnh báo nhận được trên Mock Discord Webhook",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/mock/discord-webhook/history",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"mock",
+						"discord-webhook",
+						"history"
+					]
+				},
+				"description": "Kiểm tra danh sách payload JSON embed mà Mock Webhook đã nhận được từ DiscordAppender."
+			},
+			"response": []
+		},
+		{
+			"name": "05. Xóa lịch sử cảnh báo Mock Webhook",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8080/mock/discord-webhook/clear",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"mock",
+						"discord-webhook",
+						"clear"
+					]
+				},
+				"description": "Xóa sạch bộ nhớ lưu trữ cảnh báo giả lập trên mock webhook."
+			},
+			"response": []
+		}
+	]
+}

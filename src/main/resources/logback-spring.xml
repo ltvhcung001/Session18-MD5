@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration scan="true" scanPeriod="30 seconds">
 
-    <!-- Định nghĩa mẫu log in ra Console có chứa %X{requestId} từ MDC -->
+    <!-- Định nghĩa mẫu log in ra Console có chứa %X{requestId} từ MDC (HW2) -->
     <property name="CONSOLE_LOG_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %magenta([%X{requestId:-SYSTEM}]) %highlight(%-5level) %cyan(%logger{36}) - %msg%n"/>
 
@@ -9,7 +9,7 @@
     <property name="FILE_LOG_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{requestId:-SYSTEM}] %-5level %logger{36} - %msg%n"/>
 
-    <!-- Console Appender -->
+    <!-- 1. Console Appender -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
             <pattern>${CONSOLE_LOG_PATTERN}</pattern>
@@ -17,7 +17,7 @@
         </encoder>
     </appender>
 
-    <!-- Rolling File Appender: Chuẩn Logback 1.4+ (Spring Boot 3) -->
+    <!-- 2. Rolling File Appender: Chuẩn Logback 1.4+ (Spring Boot 3) -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/application.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
@@ -32,10 +32,20 @@
         </encoder>
     </appender>
 
+    <!-- 3. [HW3 Custom Appender] Bắn cảnh báo log ERROR lên Discord / Slack Webhook -->
+    <appender name="DISCORD" class="com.storex.payment.appender.DiscordAppender">
+        <!-- Đọc Webhook URL từ biến môi trường DISCORD_WEBHOOK_URL, nếu không có sẽ trỏ về Mock Webhook cục bộ -->
+        <webhookUrl>${DISCORD_WEBHOOK_URL:-http://localhost:8080/mock/discord-webhook}</webhookUrl>
+        <enabled>true</enabled>
+        <username>StoreX Alert Bot</username>
+        <avatarUrl>https://cdn-icons-png.flaticon.com/512/564/564619.png</avatarUrl>
+    </appender>
+
     <!-- Cấu hình Logger cho package nghiệp vụ com.storex -->
     <logger name="com.storex" level="DEBUG" additivity="false">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
+        <appender-ref ref="DISCORD"/>
     </logger>
 
     <!-- Logger cho Spring Boot Framework -->
@@ -45,6 +55,7 @@
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
+        <appender-ref ref="DISCORD"/>
     </root>
 
 </configuration>
